@@ -60,7 +60,7 @@ function! s:getTagContainingString(tag, str)
   let l:tags = taglist(a:tag)
   if (len(l:tags) > 0)
     for l:tag in l:tags
-      if (filereadable(l:tag.filename) && (len(a:str) == 0 || match(readfile(l:tag.filename), a:str)))
+      if (filereadable(l:tag.filename) && match(readfile(l:tag.filename), a:str) >= 0)
         return l:tag
       endif
     endfor
@@ -72,14 +72,16 @@ function! s:findFolderFromStackTrace(src,nameFromStackTrace)
   " Remove method name.
   let l:canonicalClassName = strpart(a:nameFromStackTrace, 0, strridx(a:nameFromStackTrace, "."))
   " Remove package name.
-  let l:simpleClassName = strridx(l:canonicalClassName, ".") >= 0 ? strpart(l:canonicalClassName, strridx(l:canonicalClassName, ".")) : l:canonicalClassName
+  let l:simpleClassName = strridx(l:canonicalClassName, ".") >= 0 ? strpart(l:canonicalClassName, strridx(l:canonicalClassName, ".") + 1) : l:canonicalClassName
   " Remove class name.
   let l:package = strridx(l:canonicalClassName, ".") >= 0 ? strpart(l:canonicalClassName, 0, strridx(l:canonicalClassName, ".")) : ""
 
-  " Now first try to find a tag for the class from the required package.
-  let l:classTag = s:getTagContainingString(l:simpleClassName, l:package)
-  if (has_key(l:classTag, "filename"))
-    return fnamemodify(l:classTag.filename, ":h")
+  if exists('g:vebugger_use_tags') && g:vebugger_use_tags
+    " Now first try to find a tag for the class from the required package.
+    let l:classTag = s:getTagContainingString(l:simpleClassName, l:package)
+    if (has_key(l:classTag, "filename"))
+      return fnamemodify(l:classTag.filename, ":h")
+    endif
   endif
 
   " If no such tag was found, try to find it using the src path.
