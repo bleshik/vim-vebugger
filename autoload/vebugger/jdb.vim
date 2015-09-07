@@ -65,11 +65,14 @@ function! vebugger#jdb#_readProgramOutput(pipeName,line,readResult,debugger) dic
 	endif
 endfunction
 
-function! s:getTagContainingString(tag, str)
-  let l:tags = taglist(a:tag)
+function! s:getTagContainingString(id, language, str, include)
+  let l:tags = taglist(a:id)
   if (len(l:tags) > 0)
     for l:tag in l:tags
-      if (filereadable(l:tag.filename) && match(readfile(l:tag.filename), a:str) >= 0)
+      if (tolower(a:language) == tolower(l:tag.language) &&
+            \filereadable(l:tag.filename) &&
+            \(a:include && match(readfile(l:tag.filename), a:str) >= 0 ||
+            \!a:include && match(readfile(l:tag.filename), a:str) < 0))
         return l:tag
       endif
     endfor
@@ -77,34 +80,41 @@ function! s:getTagContainingString(tag, str)
   return {}
 endfunction
 
-function! s:findFolderFromStackTrace(src,nameFromStackTrace,frameNumber)
+function! s:findSourceFile(src,filename,nameFromStackTrace,frameNumber)
   " Remove method name.
   let l:canonicalClassName = strpart(a:nameFromStackTrace, 0, strridx(a:nameFromStackTrace, "."))
   " Remove package name.
   let l:simpleClassName = strridx(l:canonicalClassName, ".") >= 0 ? strpart(l:canonicalClassName, strridx(l:canonicalClassName, ".") + 1) : l:canonicalClassName
   " Remove class name.
   let l:package = strridx(l:canonicalClassName, ".") >= 0 ? strpart(l:canonicalClassName, 0, strridx(l:canonicalClassName, ".")) : ""
+  let l:sourceFile = ""
 
-  " We don't really use callstack, so we use tags only for the current location.
-  " Otherwise it makes everything too slow.
-  if exists('g:vebugger_use_tags') && g:vebugger_use_tags && a:frameNumber == 1
-    " Now first try to find a tag for the class from the required package.
-    let l:classTag = s:getTagContainingString(l:simpleClassName, l:package)
-    if (has_key(l:classTag, "filename"))
-      return fnamemodify(l:classTag.filename, ":h")
-    endif
-  endif
-
-  " If no such tag was found, try to find it using the src path.
+  " First try to find the source file using the package name and srcpath (it
+  " should be faster than searching using tags)
 	let l:path=a:src
 	for l:dirname in split(a:nameFromStackTrace,'\.')
 		let l:nextPath=l:path.'/'.fnameescape(l:dirname)
 		if empty(glob(l:nextPath))
-			return l:path
+      let l:sourceFile=l:path."/".a:filename
+      break
 		endif
 		let l:path=l:nextPath
 	endfor
-	return l:path
+	let l:sourceFile=l:path."/".a:filename
+
+  " If we couldn't find the source file, let's try tags, if enabled.
+  " We don't really use callstack, so we use tags only for the current location (a:frameNumber == 1).
+  " Otherwise it makes everything too slow.
+  if !filereadable(l:sourceFile) && exists('g:vebugger_use_tags') && g:vebugger_use_tags && a:frameNumber == 1
+    let l:classTag = s:getTagContainingString(l:simpleClassName, fnamemodify(a:filename, ":e"), len(l:package) > 0 ? l:package : "package", len(l:package) > 0)
+    if (has_key(l:classTag, "filename"))
+      let l:sourceFile = l:classTag.filename
+    endif
+  else
+    return ""
+  endif
+
+  return fnamemodify(l:sourceFile,':~:.')
 endfunction
 
 function! vebugger#jdb#_readWhere(pipeName,line,readResult,debugger)
@@ -112,12 +122,13 @@ function! vebugger#jdb#_readWhere(pipeName,line,readResult,debugger)
 		let l:matches=matchlist(a:line,'\v\s*\[(\d+)]\s*(\S+)\s*\(([^:]*):(\d*)\)')
 		if 4<len(l:matches)
 			let l:frameNumber=str2nr(l:matches[1])
-			let l:file=s:findFolderFromStackTrace(a:debugger.state.jdb.srcpath,l:matches[2],l:frameNumber).'/'.l:matches[3]
-			let l:file=fnamemodify(l:file,':~:.')
+			let l:file=s:findSourceFile(a:debugger.state.jdb.srcpath,l:matches[3],l:matches[2],l:frameNumber)
 			if 1==l:frameNumber " first stackframe is the current location
-				let a:readResult.std.location={
-							\'file':(l:file),
-							\'line':str2nr(l:matches[4])}
+        if (len(l:file) > 0)
+          let a:readResult.std.location={
+                \'file':(l:file),
+                \'line':str2nr(l:matches[4])}
+        endif
 			endif
 			let a:readResult.std.callstack={
 						\'clearOld':('1'==l:frameNumber),
